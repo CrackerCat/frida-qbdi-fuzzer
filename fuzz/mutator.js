@@ -1,11 +1,12 @@
 /*
 
-   american fuzzy lop++ - frida agent instrumentation
-   --------------------------------------------------
+   frida-fuzzer - frida agent instrumentation
+   ------------------------------------------
 
    Written and maintained by Andrea Fioraldi <andreafioraldi@gmail.com>
+   Based on American Fuzzy Lop by Michal Zalewski
 
-   Copyright 2019 AFLplusplus Project. All rights reserved.
+   Copyright 2019 Andrea Fioraldi. All rights reserved.
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -16,16 +17,14 @@
  */
 
 var config = require("./config.js");
+var utils = require("./utils.js");
+var index = require("./index.js");
 
 var interesting_8  = config.INTERESTING_8;
 var interesting_16 = interesting_8.concat(config.INTERESTING_16);
 var interesting_32 = interesting_16.concat(config.INTERESTING_32);
 
-function UR(n) {
-
-  return Math.floor(Math.random() * n);
-
-}
+var UR = utils.UR;
 
 function choose_block_len(limit) {
 
@@ -76,7 +75,7 @@ exports.mutate_havoc = function (buf) { // ArrayBuffer
 
   for (var i = 0; i < use_stacking; i++) {
 
-    switch (UR(14)) {
+    switch (UR(15 + ((index.dictionary.length > 0) ? 2 : 0))) {
 
       case 0:
 
@@ -312,14 +311,67 @@ exports.mutate_havoc = function (buf) { // ArrayBuffer
           break;
 
         }
-        
-        default: break;
+
+      /* Values 15 and 16 can be selected only if there are any extras
+         present in the dictionaries. */
+
+      case 15: {
+
+          /* Overwrite bytes with an extra. */
+
+          var use_extra = UR(index.dictionary.length);
+          var extra_len = index.dictionary[use_extra].byteLength;
+
+          if (extra_len > temp_len) break;
+
+          var insert_at = UR(temp_len - extra_len + 1);
+          for (var j = 0; j < extra_len; ++j)
+            out_buf.setUint8(insert_at + j, index.dictionary[use_extra][j]);
+
+          break;
+
+        }
+
+      case 16: {
+
+          var insert_at = UR(temp_len + 1);
+
+          /* Insert an extra. */
+
+          var use_extra = UR(index.dictionary.length);
+          var extra_len = index.dictionary[use_extra].byteLength;
+
+          if (temp_len + extra_len >= config.MAX_FILE) break;
+
+          buf = new ArrayBuffer(temp_len + extra_len);
+          var new_buf = new DataView(buf);
+
+          /* Head */
+          for (var j = 0; j < insert_at; ++j)
+            new_buf.setUint8(j, out_buf.getUint8(j));
+
+          /* Inserted part */
+          for (var j = 0; j < extra_len; ++j)
+            new_buf.setUint8(insert_at + j, index.dictionary[use_extra][j]);
+
+          /* Tail */
+          for (var j = insert_at; j < temp_len; ++j)
+            new_buf.setUint8(extra_len + j, out_buf.getUint8(j));
+
+          out_buf   = new_buf;
+          temp_len += extra_len;
+
+          break;
+
+        }
+
+        default: throw "ERROR: havoc switch oob, something is really wrong here!";
 
     }
 
   }
   
-  if (temp_len != buf.length)
+  if (temp_len != buf.byteLength)
     return buf.slice(0, temp_len);
   return buf;
 
